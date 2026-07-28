@@ -16,6 +16,7 @@ Most "data quality" tooling stops at producing a dashboard of red/green checks. 
 | agent.py | PipelineGuardian class — Claude tool-use orchestration loop |
 | data_quality.py | Dependency-light quality check functions (the "tools") |
 | sample_data/ | Example dataset with intentionally seeded issues |
+| tests/ | Unit tests for the data quality checks |
 
 The agent loop:
 1. Claude receives a dataset description + column list (+ optional expected schema)
@@ -31,6 +32,45 @@ cd pipeline-guardian
 pip install -r requirements.txt
 export ANTHROPIC_API_KEY=your_key_here
 python main.py
+```
+
+## Running tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/
+```
+
+## Sample output
+
+Illustrative example of the kind of diagnosis PipelineGuardian produces when run against `sample_data/orders.csv` (actual wording will vary between runs, since the agent generates it live):
+
+```
+============================================================
+PIPELINEGUARDIAN DIAGNOSIS
+============================================================
+Summary: The orders feed has multiple data quality issues that need
+attention before this data is safe to use downstream -- missing values,
+an exact duplicate order, and an incomplete region field.
+
+Issues found:
+- [high] Duplicate order: order_id 1005 appears twice with identical
+  values, which will double-count revenue if aggregated as-is.
+- [medium] Missing values in customer_id, amount, order_date, and region
+  across several rows -- enough to distort per-customer and per-region
+  rollups.
+- [low] order_id is stored as float64 instead of int64 due to a null in
+  an unrelated row; this is a pandas artifact, not a data problem.
+
+Likely root cause: an upstream retry or replay in the ingestion job
+produced the duplicate row, while the missing fields point to an
+incomplete write from the source system rather than a transformation bug.
+
+Recommended fix:
+- Deduplicate on order_id before loading into the warehouse.
+- Add NOT NULL constraints (or a quarantine step) for customer_id,
+  amount, and region at ingestion.
+- Backfill or flag rows with missing order_date rather than dropping them.
 ```
 
 ## Tech
