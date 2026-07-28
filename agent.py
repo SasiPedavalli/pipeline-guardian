@@ -12,7 +12,13 @@ from __future__ import annotations
 import json
 import os
 import pandas as pd
-from anthropic import Anthropic
+from anthropic import (
+    Anthropic,
+    AuthenticationError,
+    RateLimitError,
+    APIConnectionError,
+    APIStatusError,
+)
 
 from data_quality import CHECK_REGISTRY
 
@@ -86,9 +92,16 @@ Be direct and specific. Do not restate raw JSON back at the user - translate it 
 
 
 class PipelineGuardian:
-    def __init__(self, df: pd.DataFrame, api_key: str | None = None):
+    def __init__(self, df: pd.DataFrame, api_key: str | None = None, max_turns: int = 6):
         self.df = df
-        self.client = Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
+        resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not resolved_key:
+            raise ValueError(
+                "No Anthropic API key found. Set the ANTHROPIC_API_KEY environment "
+                "variable, or pass api_key= explicitly when creating PipelineGuardian()."
+            )
+        self.client = Anthropic(api_key=resolved_key)
+        self.max_turns = max_turns
 
     def _run_tool(self, name: str, tool_input: dict) -> dict:
         fn = CHECK_REGISTRY[name]
@@ -109,14 +122,35 @@ class PipelineGuardian:
 
         messages = [{"role": "user", "content": user_prompt}]
 
-        for _ in range(6):
-            response = self.client.messages.create(
-                model=MODEL,
-                max_tokens=1500,
-                system=SYSTEM_PROMPT,
-                tools=TOOLS,
-                messages=messages,
-            )
+        for _ in range(self.max_turns):
+            try:
+                response = self.client.messages.create(
+                    model=MODEL,
+                    max_tokens=1500,
+                    system=SYSTEM_PROMPT,
+                    tools=TOOLS,
+                    messages=messages,
+                )
+            except AuthenticationError:
+                return (
+                    "PipelineGuardian error: authentication with the Anthropic API failed. "
+                    "Check that ANTHROPIC_API_KEY is set to a valid, active key."
+                )
+            except RateLimitError:
+                return (
+                    "PipelineGuardian error: the Anthropic API rate limit was exceeded. "
+                    "Wait a moment and try again, or check your account's usage tier."
+                )
+            except APIConnectionError:
+                return (
+                    "PipelineGuardian error: could not connect to the Anthropic API. "
+                    "Check your network connection and try again."
+                )
+            except APIStatusError as e:
+                return (
+                    f"PipelineGuardian error: the Anthropic API returned an error "
+                    f"(status {e.status_code}). {e.message}"
+                )
 
             if response.stop_reason != "tool_use":
                 return "".join(b.text for b in response.content if b.type == "text")
