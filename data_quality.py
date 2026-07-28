@@ -40,6 +40,14 @@ def check_schema_drift(df: pd.DataFrame, expected_schema: dict) -> dict:
     """
     Compares actual columns/dtypes against an expected schema definition.
     expected_schema example: {"order_id": "int64", "order_date": "object"}
+
+    Known limitation: pandas upcasts an otherwise-int64 column to float64
+    when it contains any null values, since its legacy (non-nullable) int
+    dtype has no way to represent NaN. This means a column that is
+    logically an integer ID but has missing values will report a type
+    mismatch against an expected schema of "int64" purely because of the
+    missing data -- that is expected pandas behavior, not a bug in this
+    check, but it is worth knowing when interpreting drift results.
     """
     actual = {col: str(dtype) for col, dtype in df.dtypes.items()}
     missing_columns = [c for c in expected_schema if c not in actual]
